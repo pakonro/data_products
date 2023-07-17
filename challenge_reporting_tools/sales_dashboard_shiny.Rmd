@@ -1,0 +1,297 @@
+---
+title: "Sales Dashboard"
+output: 
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+
+# Core
+library(tidyverse)
+
+# Interactive Visualizations
+library(plotly)
+
+# Spatial Data
+library(raster)
+library(sf)
+
+# Currency formatting
+source("00_scripts/plot_sales.R")
+```
+
+```{r}
+# Bike data
+bikes_tbl      <- readRDS("01_data/bikes_tbl.rds")
+bikeshops_tbl  <- readRDS("01_data/bikeshops_tbl.rds")
+orderlines_tbl <- readRDS("01_data/orderlines_tbl.rds")
+
+bike_orderlines_tbl <- orderlines_tbl %>%
+    left_join(bikes_tbl,     by = c("product_id" = "bike_id")) %>%
+    left_join(bikeshops_tbl, by = c("customer_id" = "bikeshop_id")) %>%
+    mutate(total_price = price_euro * quantity)
+
+
+# German spatial data
+germany_sp <- getData('GADM', country='DE', level=1) 
+germany_sf <- st_as_sf(germany_sp) %>% 
+  
+                  # Add english names
+                  mutate(VARNAME_1 = ifelse(is.na(VARNAME_1), NAME_1, VARNAME_1)) 
+
+
+
+
+
+```
+
+
+Column {data-width=500}
+---------------------------------------------------------------
+
+### By State
+
+```{r}
+geo_plot_tbl <- bike_orderlines_tbl %>% 
+                  group_by(state) %>%
+                  summarise(total_revenue = sum(total_price)) %>%
+                  ungroup() %>%
+                  right_join(germany_sf, by = c("state" = "VARNAME_1")) %>% 
+                  mutate(total_revenue = ifelse(is.na(total_revenue), 0, total_revenue)) %>% 
+                  mutate(label_text = str_glue("State: {state}
+                                         Revenue: {format_to_euro(total_revenue)}")) %>% 
+                  st_as_sf()
+```
+
+
+```{r}
+german_map <- plot_ly(geo_plot_tbl, 
+        split      = ~NAME_1, 
+        color      = ~total_revenue,
+        colors     = "Blues",
+        stroke     = I("black"),
+        hoverinfo  = 'text', 
+        text       = ~label_text, 
+        hoveron    = "fills", 
+        showlegend = FALSE) 
+
+
+
+
+german_map
+
+```
+
+Column {data-width=500}
+---------------------------------------------------------------
+
+
+### Over Time
+
+```{r}
+
+# Load required libraries
+library(dplyr)
+
+total_sales_w_tbl <- bike_orderlines_tbl %>%
+  dplyr::select(order_date, total_price) %>%
+  mutate(date_rounded = floor_date(order_date, unit = "week")) %>%
+  group_by(date_rounded) %>%
+  summarise(total_sales = sum(total_price)) %>%
+  ungroup() %>%
+  mutate(label_text = str_glue("Sales: {format_to_euro(total_sales)}
+                                 Date: {date_rounded %>% format('%B %Y')}"))
+
+
+# 1.2 Interactive Plot ----
+
+# Step 1: Create ggplot with text feature
+total_sales_weekly <- total_sales_w_tbl %>%
+  ggplot(aes(x = date_rounded, y = total_sales)) +
+  
+  # Geoms
+  geom_point() +
+  geom_smooth(method = "loess", span = 0.2) +
+  
+  # Formatting
+  
+  # Convert scale to euro format
+  scale_y_continuous(labels = euro_format()) +
+  
+  # Make sure 0 will always be shown (even if the data is far away)
+  expand_limits(y = 0) +
+  
+  labs(
+    title = "Total Sales",
+    y = "Revenue (EUR)",
+    x = ""
+  )
+
+
+
+
+
+
+
+
+
+library(ggplot2)
+library(stringr)
+
+generate_category_sales_plot <- function(category_1, category_2, unit) {
+  
+  # Select and summarize data
+  data_tbl <- bike_orderlines_tbl %>%
+    dplyr::select(order_date, category_1, category_2, total_price) %>%
+    mutate(date_rounded = floor_date(order_date, unit = unit)) %>%
+    group_by(date_rounded, category_1, category_2) %>%
+    summarise(total_sales = sum(total_price)) %>%
+    ungroup() %>%
+    mutate(label_text = str_glue("Sales: {format_to_euro(total_sales)}
+                                 Date: {date_rounded %>% format('%B %Y')}")) %>%
+    mutate(category_2 = as_factor(category_2) %>% fct_reorder2(date_rounded, total_sales))
+  
+  # Handle Inputs
+  cat_1_text <- str_to_lower(category_1)
+  cat_2_text <- str_to_lower(category_2)
+  
+  # Create Filter Logic
+  if (cat_1_text != "all") {
+    data_tbl <- data_tbl %>%
+      filter(category_1 %>% str_to_lower() %>% str_detect(pattern = cat_1_text))
+  }
+  
+  if (cat_2_text != "all") {
+    data_tbl <- data_tbl %>%
+      filter(category_2 %>% str_to_lower() %>% str_detect(pattern = cat_2_text))
+  }
+  
+  # Plot settings
+  ncol <- 1
+  scales <- "free_y"
+  
+  # Create the plot
+  category_sales_plot <- data_tbl %>%
+    ggplot(aes(x = date_rounded, y = total_sales, color = category_2)) +
+    geom_point(aes(text = label_text), color = "#2c3e50") +
+    geom_smooth(method = "loess", span = 0.2) +
+    facet_wrap(~ category_2, scales = scales, ncol = ncol) +
+    expand_limits(y = 0) +
+    theme(legend.position = "none",
+          strip.text.x = element_text(margin = margin(5, 5, 5, 5, unit = "pt"))) +
+    scale_y_continuous(labels = euro_format(scale = 1e-3, suffix = "K €")) +
+    labs(title = "", y = "", x = "")
+  
+  # Return the plot
+  return(category_sales_plot)
+}
+
+plot <- generate_category_sales_plot("Mountain", "All", "quarter")
+
+
+
+
+
+
+
+# Create reactive inputs
+ui <- fluidPage(
+  selectInput("category_1", "Bike Type", c('All', 'Road', 'Mountain')),
+  selectInput("category_2", "Bike Family", c('All', 'Endurance', 'Race', 'Cyclocross', 'Triathlon Bike')),
+  plotOutput("category_sales_plot")
+)
+
+server <- function(input, output) {
+  
+  # Reactive expression for generating the plot
+  generate_category_sales_plot <- reactive({
+    
+    # Select and summarize data
+    data_tbl <- bike_orderlines_tbl %>%
+      dplyr::select(order_date, category_1, category_2, total_price) %>%
+      mutate(date_rounded = floor_date(order_date, unit = "quarter")) %>%
+      group_by(date_rounded, category_1, category_2) %>%
+      summarise(total_sales = sum(total_price)) %>%
+      ungroup() %>%
+      mutate(label_text = str_glue("Sales: {format_to_euro(total_sales)}
+                                   Date: {date_rounded %>% format('%B %Y')}")) %>%
+      mutate(category_2 = as_factor(category_2) %>% fct_reorder2(date_rounded, total_sales))
+    
+    # Handle Inputs
+    cat_1_text <- str_to_lower(input$category_1)
+    cat_2_text <- str_to_lower(input$category_2)
+    
+    # Create Filter Logic
+    if (cat_1_text != "all") {
+      data_tbl <- data_tbl %>%
+        filter(category_1 %>% str_to_lower() %>% str_detect(pattern = cat_1_text))
+    }
+    
+    if (cat_2_text != "all") {
+      data_tbl <- data_tbl %>%
+        filter(category_2 %>% str_to_lower() %>% str_detect(pattern = cat_2_text))
+    }
+    
+    # Plot settings
+    ncol <- 1
+    scales <- "free_y"
+    
+    # Create the plot
+    category_sales_plot <- data_tbl %>%
+      ggplot(aes(x = date_rounded, y = total_sales, color = category_2)) +
+      geom_point(aes(text = label_text), color = "#2c3e50") +
+      geom_smooth(method = "loess", span = 0.2) +
+      facet_wrap(~ category_2, scales = scales, ncol = ncol) +
+      expand_limits(y = 0) +
+      theme(legend.position = "none",
+            strip.text.x = element_text(margin = margin(5, 5, 5, 5, unit = "pt"))) +
+      scale_y_continuous(labels = euro_format(scale = 1e-3, suffix = "K €")) +
+      labs(title = "", y = "", x = "")
+    
+    # Return the plot
+    return(category_sales_plot)
+  })
+  
+  # Render the plot
+  output$category_sales_plot <- renderPlot({
+    generate_category_sales_plot()
+  })
+}
+
+
+
+# Make data
+set.seed(123)
+sales_data_tbl <- tibble(
+  date  = seq.Date(from = ymd("2018-01-01"), to = today(), length.out = 90),
+  class = sample(c("marketing", "sales", "research"), size = 90, replace = TRUE),
+  sales = runif(n = 90, min = 1, max = 100)
+)
+
+
+
+
+
+# Inputs
+
+
+dateRangeInput(inputId = "date_range", 
+               label   = h4("Date Range"), 
+               start   = "2018-01-01", 
+               end     = today(),          # "2019-05-10" 
+               min     = min(sales_data_tbl$date), 
+               max     = max(sales_data_tbl$date), 
+               startview = "year")
+
+
+
+shinyApp(ui, server)
+
+
+
+```
