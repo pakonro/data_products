@@ -196,11 +196,73 @@ plot_stock_data <- function(stock_data) {
 
 # 5.0 GENERATE COMMENTARY ----
 
+warning_signal <- stock_data_tbl %>%
+  tail(1) %>% # Get last value
+  mutate(mavg_warning_flag = mavg_short < mavg_long) %>% # Compare long and short
+  pull(mavg_warning_flag)
+
+
+if (warning_signal) {
+  commentary <- "The short-term moving average is less than the long-term moving average, indicating a potentially negative trend."
+} else {
+  commentary <- "The short-term moving average is greater than the long-term moving average, indicating a potentially positive trend."
+}
+
+
+n_short <- sum(is.na(stock_data_tbl$mavg_short)) + 1
+n_long <- sum(is.na(stock_data_tbl$mavg_long)) + 1
+
+if (warning_signal) {
+  str_glue("In reviewing the stock prices of {user_input}, the {n_short}-day moving average is below the {n_long}-day moving average, indicating negative trends")
+} else {
+  str_glue("In reviewing the stock prices of {user_input}, the {n_short}-day moving average is above the {n_long}-day moving average, indicating positive trends")
+}
+
+
+
+generate_commentary <- function(data, user_input) {
+  warning_signal <- data %>%
+    tail(1) %>%
+    mutate(mavg_warning_flag = mavg_short < mavg_long) %>%
+    pull(mavg_warning_flag)
+  
+  n_short <- sum(is.na(data$mavg_short)) + 1
+  n_long <- sum(is.na(data$mavg_long)) + 1
+  
+  if (warning_signal) {
+    str_glue("In reviewing the stock prices of {user_input}, the {n_short}-day moving average is below the {n_long}-day moving average, indicating negative trends.")
+  } else {
+    str_glue("In reviewing the stock prices of {user_input}, the {n_short}-day moving average is above the {n_long}-day moving average, indicating positive trends.")
+  }
+}
+
+generate_commentary(stock_data_tbl, user_input = user_input)
 
 
 # 6.0 TEST WORKFLOW ----
 
+from <- "2022-01-01"
+to <- "2022-06-30"
+
+
+# get_stock_list("DAX")
+"ADS.DE, Adidas" %>% 
+  get_symbol_from_user_input() %>%
+  get_stock_data(from = from, to = to ) %>%
+  # plot_stock_data() %>%
+  generate_commentary(user_input = "ADS.DE, Adidas")
+## In reviewing the stock prices of ADS.DE, Adidas, the 20-day moving average is above the 50-day moving average, indicating positive trends
 
 
 # 7.0 SAVE SCRIPTS ----
+
+
+fs::dir_create("00_scripts") #create folder
+
+# write functions to an R file
+dump(
+  list = c("get_stock_list", "get_symbol_from_user_input", "get_stock_data", "plot_stock_data", "currency_format", "generate_commentary"),
+  file = "00_scripts/stock_analysis_functions.R", 
+  append = FALSE) # Override existing 
+
 
