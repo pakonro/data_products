@@ -1,11 +1,3 @@
-#Business Analytics with Data Science and Machine Learning ----
-  # Building Business Data Products ----
-# STOCK ANALYZER APP - LAYOUT -----
-
-# APPLICATION DESCRIPTION ----
-# - Create a basic layout in shiny showing the stock dropdown, interactive plot and commentary
-
-
 # LIBRARIES ----
 library(shiny)
 library(shinyWidgets)
@@ -24,16 +16,15 @@ get_stock_list <- function(stock_index = "DAX") {
   index_lower <- str_to_lower(stock_index)
   # Control if user input is valid
   index_valid <- c("dax", "sp500", "dow", "nasdaq")
-  if (!index_lower %in% index_valid) {
-    stop(paste0("stock_index must be a character string in the form of a valid exchange.",
-                " The following are valid options:\n",
-                stringr::str_c(str_to_upper(index_valid), collapse = ", ")))
+  if (!index_lower %in% index_valid) {stop(paste0("x must be a character string in the form of a valid exchange.",
+                                                  " The following are valid options:\n",
+                                                  stringr::str_c(str_to_upper(index_valid), collapse = ", ")))
   }
   
   # Control for different currencies and different column namings in wiki
   vars <- switch(index_lower,
                  dax    = list(wiki     = "DAX", 
-                               columns  = c("Symbol", "Unternehmen")),
+                               columns  = c("Ticker", "Company")),
                  sp500  = list(wiki     = "List_of_S%26P_500_companies", 
                                columns  = c("Symbol", "Security")),
                  dow    = list(wiki     = "Dow_Jones_Industrial_Average",
@@ -43,22 +34,31 @@ get_stock_list <- function(stock_index = "DAX") {
   )
   
   # Extract stock list depending on user input
-  read_html(glue("https://en.wikipedia.org/wiki/{vars$wiki}")) %>%
+  read_html(glue("https://en.wikipedia.org/wiki/{vars$wiki}")) %>% 
+    
     # Extract table from wiki
-    html_nodes(css = "#constituents") %>%
-    html_table() %>%
-    dplyr::first() %>%
-    as_tibble(.name_repair = "minimal") %>%
+    html_nodes(css = "#constituents") %>% 
+    html_table() %>% 
+    dplyr::first() %>% 
+    as_tibble(.name_repair = "minimal") %>% 
     # Select desired columns (different for each article)
-    dplyr::select(all_of(vars$columns)) %>%
+    dplyr::select(vars$columns) %>% 
     # Make naming identical
-    dplyr::rename("Ticker symbol" = vars$columns[1], "Company" = vars$columns[2]) %>%
+    set_names(c("symbol", "company")) %>% 
+    
+    # Clean (just relevant for DOW)
+    mutate(symbol = str_remove(symbol, "NYSE\\:[[:space:]]")) %>% 
+    
     # Sort
-    arrange(`Ticker symbol`) %>%
+    arrange(symbol) %>%
     # Create the label for the dropdown list (Symbol + company name)
-    mutate(label = glue("{`Ticker symbol`}, {Company}")) %>%
+    mutate(label = str_c(symbol, company, sep = ", ")) %>%
     dplyr::select(label)
+  
 }
+
+stock_list_tbl <- get_stock_list()
+
 # UI ----
 
 ui <- fluidPage(
@@ -90,6 +90,11 @@ ui <- fluidPage(
           inputId = "analyze",
           label = "Analyze",
           icon = icon("download")
+        ),
+        div(
+          id = "analyze_info",
+          h4("Analyze Info"),
+          textOutput("selected_symbol")
         )
       )
     ),
@@ -97,7 +102,7 @@ ui <- fluidPage(
       width = 8,
       div(
         id = "plot_div",
-        h4("Interactive Time Series Plot"),
+        h4(textOutput("plot_header")),  # Placeholder for the selected stock symbol
         plotlyOutput("stock_plot")
       )
     )
@@ -107,11 +112,27 @@ ui <- fluidPage(
   div(
     h2("Analyst Commentary"),
     p("This is where the commentary will be displayed.")
+  ),
+  
+  # 4.0 STOCK DATA ----
+  div(
+    h2("Stock Data"),
+    verbatimTextOutput("stock_data")
   )
 )
 
+
 # SERVER ----
 server <- function(input, output, session) {
+  
+  # Reactive value to store the selected stock symbol
+  selected_stock <- reactiveVal()
+  
+  # Update the selected stock symbol whenever a stock is selected
+  observeEvent(input$stock_selection, {
+    print(stock_data_tbl)
+    selected_stock(input$stock_selection)
+  })
   
   # Generate the stock data based on the selected stock
   stock_data <- reactive({
@@ -127,6 +148,30 @@ server <- function(input, output, session) {
   # Generate the commentary based on the stock data
   output$commentary <- renderText({
     generate_commentary(stock_data(), user_input = input$stock_selection)
+  })
+  # Stock Symbol ----
+  stock_symbol <- eventReactive(input$analyze, {
+    input$stock_selection
+  })
+  # Render the selected symbol in the UI
+  output$selected_symbol <- renderText({
+    stock_symbol()
+  })
+  # Render the selected stock symbol in the plot header
+  output$plot_header <- renderText({
+    selected_stock()
+  })
+  # Get Stock Data ----
+  stock_data_tbl <- reactive({
+    stock_symbol() %>% 
+      get_stock_data(from = today() - days(180), 
+                     to = today(),
+                     mavg_short = 20,
+                     mavg_long = 50)
+  })
+  
+  output$stock_data <- renderPrint({
+    stock_data_tbl()
   })
   
 }
